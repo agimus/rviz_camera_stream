@@ -70,11 +70,19 @@ private:
   image_transport::ImageTransport it_;
   image_transport::Publisher pub_;
   uint image_id_;
+  Ogre::PixelFormat pf_;
+  std::string encoding_;
 public:
   VideoPublisher() :
     it_(nh_),
     image_id_(0)
   {
+  }
+
+  void set_encoding (Ogre::PixelFormat pf, std::string& encoding)
+  {
+    pf_ = pf;
+    encoding_ = encoding;
   }
 
   std::string get_topic()
@@ -122,17 +130,13 @@ public:
     // TODO(lucasw) make things const that can be
     int height = render_object->getHeight();
     int width = render_object->getWidth();
-    // the suggested pixel format is most efficient, but other ones
-    // can be used.
-    Ogre::PixelFormat pf = render_object->suggestPixelFormat();
-    // Ogre::PixelFormat pf = Ogre::PF_R8G8B8;
-    uint pixelsize = Ogre::PixelUtil::getNumElemBytes(pf);
+    uint pixelsize = Ogre::PixelUtil::getNumElemBytes(pf_);
     uint datasize = width * height * pixelsize;
 
     // 1.05 multiplier is to avoid crash when the window is resized.
     // There should be a better solution.
     uchar *data = OGRE_ALLOC_T(uchar, datasize * 1.05, Ogre::MEMCATEGORY_RENDERSYS);
-    Ogre::PixelBox pb(width, height, 1, pf, data);
+    Ogre::PixelBox pb(width, height, 1, pf_, data);
     render_object->copyContentsToMemory(pb, Ogre::RenderTarget::FB_AUTO);
 
     sensor_msgs::Image image;
@@ -142,33 +146,7 @@ public:
     image.height = height;
     image.width = width;
     image.step = pixelsize * width;
-    if (pf == Ogre::PF_BYTE_BGR)
-      image.encoding = sensor_msgs::image_encodings::BGR8;
-    else if (pf == Ogre::PF_BYTE_RGB)
-      image.encoding = sensor_msgs::image_encodings::RGB8;
-    else if (pf == Ogre::PF_BYTE_BGRA)
-      image.encoding = sensor_msgs::image_encodings::BGRA8;
-    else if (pf == Ogre::PF_BYTE_RGBA)
-      image.encoding = sensor_msgs::image_encodings::RGBA8;
-    // There is no PF_BYTE for this or PF_X8R8G8B8
-    else if (pf == Ogre::PF_X8R8G8B8)
-#if OGRE_ENDIAN == OGRE_ENDIAN_BIG
-      image.encoding = sensor_msgs::image_encodings::RGBA8;
-#else
-      image.encoding = sensor_msgs::image_encodings::BGRA8;
-#endif
-    else if (pf == Ogre::PF_X8B8G8R8)
-#if OGRE_ENDIAN == OGRE_ENDIAN_BIG
-      image.encoding = sensor_msgs::image_encodings::BGRA8;
-#else
-      image.encoding = sensor_msgs::image_encodings::RGBA8;
-#endif
-
-    // TODO(lucasw) support more encodings
-    else
-    {
-      ROS_ERROR_STREAM("unknown pixel format " << pixelsize << " " << pf);
-    }
+    image.encoding = encoding_;
     image.is_bigendian = (OGRE_ENDIAN == OGRE_ENDIAN_BIG);
     image.data.resize(datasize);
     memcpy(&image.data[0], data, datasize);
@@ -235,6 +213,27 @@ CameraPub::CameraPub()
   background_color_property_ = new ColorProperty("Background Color", Qt::black,
       "Sets background color, values from 0.0 to 1.0.",
                                            this, SLOT(updateBackgroundColor()));
+
+  encoding_property_ = new EnumProperty ("Image encoding", "Suggested",
+      "Set the output image encoding.", this, SLOT(updateEncoding()));
+  encoding_property_->addOption ("Suggested", -1);
+
+  encoding_property_->addOptionStd (sensor_msgs::image_encodings::MONO8, Ogre::PF_L8);
+  encoding_property_->addOptionStd (sensor_msgs::image_encodings::BGR8, Ogre::PF_BYTE_BGR);
+  encoding_property_->addOptionStd (sensor_msgs::image_encodings::RGB8, Ogre::PF_BYTE_RGB);
+  encoding_property_->addOptionStd (sensor_msgs::image_encodings::BGRA8, Ogre::PF_BYTE_BGRA);
+  encoding_property_->addOptionStd (sensor_msgs::image_encodings::RGBA8, Ogre::PF_BYTE_RGBA);
+  // There is no PF_BYTE for this or PF_X8R8G8B8
+#if OGRE_ENDIAN == OGRE_ENDIAN_BIG
+  encoding_property_->addOptionStd(sensor_msgs::image_encodings::RGBA8, Ogre::PF_X8R8G8B8);
+#else
+  encoding_property_->addOptionStd(sensor_msgs::image_encodings::BGRA8, Ogre::PF_X8R8G8B8);
+#endif
+#if OGRE_ENDIAN == OGRE_ENDIAN_BIG
+  encoding_property_->addOptionStd(sensor_msgs::image_encodings::BGRA8, Ogre::PF_X8B8G8R8);
+#else
+  encoding_property_->addOptionStd(sensor_msgs::image_encodings::RGBA8, Ogre::PF_X8B8G8R8);
+#endif
 }
 
 CameraPub::~CameraPub()
@@ -309,6 +308,7 @@ void CameraPub::onInitialize()
 
   this->addChild(visibility_property_, 0);
   updateDisplayNamespace();
+  updateEncoding();
 }
 
 void CameraPub::updateTopic()
@@ -438,6 +438,57 @@ void CameraPub::updateFrameRate()
 
 void CameraPub::updateBackgroundColor()
 {
+}
+
+void CameraPub::updateEncoding()
+{
+  if (video_publisher_ == NULL) return;
+
+  Ogre::PixelFormat pf;
+  if (encoding_property_->getOptionInt() == -1)
+    // the suggested pixel format is most efficient, but other ones
+    // can be used.
+    pf = render_texture_->suggestPixelFormat();
+  else
+    pf = (Ogre::PixelFormat) encoding_property_->getOptionInt();
+
+  std::string encoding;
+  switch (pf) {
+    case Ogre::PF_L8:
+      encoding = sensor_msgs::image_encodings::MONO8;
+      break;
+    case Ogre::PF_BYTE_BGR:
+      encoding = sensor_msgs::image_encodings::BGR8;
+      break;
+    case Ogre::PF_BYTE_RGB:
+      encoding = sensor_msgs::image_encodings::RGB8;
+      break;
+    case Ogre::PF_BYTE_BGRA:
+      encoding = sensor_msgs::image_encodings::BGRA8;
+      break;
+    case Ogre::PF_BYTE_RGBA:
+      encoding = sensor_msgs::image_encodings::RGBA8;
+      break;
+      // There is no PF_BYTE for this or PF_X8R8G8B8
+    case Ogre::PF_X8R8G8B8:
+#if OGRE_ENDIAN == OGRE_ENDIAN_BIG
+      encoding = sensor_msgs::image_encodings::RGBA8;
+#else
+      encoding = sensor_msgs::image_encodings::BGRA8;
+#endif
+      break;
+    case Ogre::PF_X8B8G8R8:
+#if OGRE_ENDIAN == OGRE_ENDIAN_BIG
+      encoding = sensor_msgs::image_encodings::BGRA8;
+#else
+      encoding = sensor_msgs::image_encodings::RGBA8;
+#endif
+      break;
+    default:
+      ROS_ERROR_STREAM("unknown pixel format " << pf << ".");
+  }
+
+  video_publisher_->set_encoding (pf, encoding);
 }
 
 void CameraPub::updateDisplayNamespace()

@@ -107,6 +107,7 @@ private Q_SLOTS:
   virtual void updateFrameRate();
   virtual void updateBackgroundColor();
   virtual void updateDisplayNamespace();
+  virtual void updateEncoding();
 
 private:
   std::string camera_trigger_name_;
@@ -134,6 +135,7 @@ private:
   DisplayGroupVisibilityProperty* visibility_property_;
   IntProperty* queue_size_property_;
   StringProperty* namespace_property_;
+  EnumProperty* encoding_property_;
 
   FloatProperty* frame_rate_property_;
   ColorProperty* background_color_property_;
